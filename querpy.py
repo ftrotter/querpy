@@ -1,6 +1,8 @@
 """
+querpy.py
+
 The Query class is intended to provide a high level interface for
-building/editing SQL queries.
+building/editing SQL queries. Built before we understood what SQLAlchemy was. 
 
 Example usage:
     >>> new_query = Query()
@@ -30,6 +32,7 @@ class Query(object):
     #the design of the where list is such that every element of the list has an 'AND' or 'OR' as a prefix..
     #but the first one after the where does not need that.. so we just look for a WHERE OR or a WHERE AND and remove the 'OR' or 'AND'
     where_clean_up = re.compile('(?<=WHERE )\s.*?AND|(?<=WHERE )\s.*?OR') 
+    having_clean_up = re.compile('(?<=HAVING )\s.*?AND|(?<=HAVING )\s.*?OR')
 
     # All of these fmt_(something) help with the SQL pretty print implementation
     fmt = re.compile('\s(?=FROM)|\s(?=WHERE)|\s(?=GROUP BY)')
@@ -44,7 +47,8 @@ class Query(object):
         )
     )
     fmt_commas = re.compile('(?<=,)\s')
-    fmt_and = re.compile('(?<=WHERE).*$', flags=re.S)
+    fmt_where_and = re.compile('(?<=WHERE).*$', flags=re.S)
+    fmt_having_and = re.compile('(?<=HAVING).*$', flags=re.S)
     fmt_or = re.compile('\sOR\s')
 
 
@@ -57,16 +61,20 @@ class Query(object):
         self.j = JoinComponent()
         self.w = WhereComponent()
         self.g = QueryComponent('GROUP BY', sep=',')
+        self.h = HavingComponent()
         self.o = QueryComponent('ORDER BY', sep=',')
         self.l = LimitComponent()
 
 
     @property
     def statement(self):
+
+        where_statement = re.subn(self.where_clean_up, '', self.w())[0]
+        having_statement = re.subn(self.having_clean_up, '', self.h())[0]
+
         # Merges the various SQL componenets into a single SQL statement
-        elements = [self.ci(), self.s(), self.f(), self.j(), self.w(), self.g(), self.o(), self.l()]
-        full_statement = re.subn(self.where_clean_up, '', ' '.join(elements))[0] # removes messy contents of WHERE statements? Note sure why this is needed or why it is run on the whole SQL statement
-        full_statement = re.subn(self.whitespace_regex, '', full_statement)[0]  # flattens pretty print SQL to a single line by removing whitespace
+        elements = [self.ci(), self.s(), self.f(), self.j(), where_statement, self.g(), having_statement, self.o(), self.l()]
+        full_statement = re.subn(self.whitespace_regex, '', ' '.join(elements))[0]  # flattens pretty print SQL to a single line by removing whitespace
         if full_statement:
             #Then our regex and merging has worked and return the single line of SQL
             return full_statement
@@ -122,7 +130,8 @@ class Query(object):
         query = re.subn(self.fmt_after, '\n    ', query)[0]
         query = re.subn(self.fmt_join, '\n      ', query)[0]
         query = re.subn(self.fmt_commas, '\n    ', query)[0]
-        query = re.subn(self.fmt_and, Query.replace_and, query)[0]
+        query = re.subn(self.fmt_where_and, Query.replace_and, query)[0]
+        query = re.subn(self.fmt_having_and, Query.replace_and, query)[0]
         query = re.subn(self.fmt_or, '\n      OR ', query)[0]
         
         return query
@@ -179,7 +188,6 @@ class QueryComponent(object):
 
     __iand__ = __ior__ = __iadd__  # lets set the default for &= and |= to be just += to start..
 
-
     # Note this is a modification of the original code, which did not have the ability to handle an object 
     # That knows how to become a string.. like DBTable....
     # TODO write a test that this works correctly for DBTable objects.
@@ -198,7 +206,6 @@ class QueryComponent(object):
             except Exception:
                 raise ValueError('Item must be a string, list, or object convertible to string')
 
-
     def clear(self):
         self.components = list()
 
@@ -206,7 +213,8 @@ class QueryComponent(object):
         # This is the function that converts the list of items in the querycomponent into a long string
         # it is always prefixed by the header..
         if self.components:
-            return self.header + self.sep.join(self.components)
+            return_me = self.header + self.sep.join(self.components)
+            return return_me
         return ''
 
     def __getitem__(self, key):
@@ -238,9 +246,9 @@ class CreateInsertComponent(QueryComponent):
         self.components = list() # overwrites whatever was there
         if self.is_first_data_add:
             #Then this is a CREATE TABLE AS clause
-            self.header = 'CREATE TABLE ' + item + " AS \n" 
+            self.header = 'CREATE TABLE ' + str(item) + " AS \n" 
         else:
-            self.header = 'INSERT INTO ' + item + " \n"
+            self.header = 'INSERT INTO ' + str(item) + " \n"
         return self
 
     def __init__(self):
@@ -393,3 +401,33 @@ class WhereComponent(QueryComponent):
 
     __repr__ = __str__
 
+class HavingComponent(QueryComponent):
+
+    header = "HAVING"
+
+    def __init__(self, sep=''):
+        self.header = self.header + ' '
+        QueryComponent.__init__(self, self.header, sep)
+
+    def __iand__(self, item):
+        self.add_item(item, 'AND')
+        return self
+
+    def __ior__(self, item):
+        # add this to the list, but with a seperator of 'OR', this will be called when someone uses |=
+        self.add_item(item, 'OR')
+        return self
+
+    __iadd__ = __iand__ # unless we use |= (which will invoke our custom built or function) we are using an "AND"
+
+    def __str__(self):
+        components = self.components
+        if components:
+            components = self.components[:]
+            components[0] = re.sub('^AND |^OR ', '', components[0])
+        to_print = list()
+        for n, c in enumerate(components):
+            to_print.append("{0}: '{1}'".format(n, c))
+        return 'index: item\n' + ', '.join(to_print)
+
+    __repr__ = __str__
