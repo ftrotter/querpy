@@ -179,16 +179,25 @@ class QueryComponent(object):
 
     __iand__ = __ior__ = __iadd__  # lets set the default for &= and |= to be just += to start..
 
+
+    # Note this is a modification of the original code, which did not have the ability to handle an object 
+    # That knows how to become a string.. like DBTable....
+    # TODO write a test that this works correctly for DBTable objects.
     def add_item(self, item, prefix=''):
         if prefix:
             prefix = prefix + ' '
-        if type(item) == str:
+        if isinstance(item, str):  # Handle strings
             self.components.append(''.join([prefix, item]))
-        elif type(item) == list:
+        elif isinstance(item, list):  # Handle lists
             items = [''.join([prefix, i]) for i in item]
             self.components.extend(items)
-        else:
-            raise ValueError('Item must be a string or list')
+        else:  # Handle objects by converting them to strings
+            try:
+                item_as_string = str(item)
+                self.components.append(''.join([prefix, item_as_string]))
+            except Exception:
+                raise ValueError('Item must be a string, list, or object convertible to string')
+
 
     def clear(self):
         self.components = list()
